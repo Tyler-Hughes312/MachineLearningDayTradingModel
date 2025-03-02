@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Price Predictor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --dark-bg: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text-color: #e0e0e0;
+            --border-color: #404040;
+            --hover-bg: #353535;
+        }
+        
+        body {
+            padding: 20px;
+            background-color: var(--dark-bg);
+            color: var(--text-color);
+            background-image: url('https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1920&q=80');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            min-height: 100vh;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(26, 26, 26, 0.85);
+            z-index: -1;
+        }
+        
+        .container {
+            max-width: 1200px;
+            background-color: var(--card-bg);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.3);
+            margin-top: 50px;
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(10px);
+        }
+        
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+        }
+        
+        .card-body {
+            color: var(--text-color);
+        }
+        
+        .form-control {
+            background-color: var(--dark-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+        }
+        
+        .form-control:focus {
+            background-color: var(--dark-bg);
+            border-color: #0d6efd;
+            color: var(--text-color);
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+        
+        .table {
+            color: var(--text-color);
+        }
+        
+        .table thead th {
+            background-color: var(--card-bg);
+            color: var(--text-color);
+            border-color: var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        
+        .table tbody tr:hover {
+            background-color: var(--hover-bg);
+        }
+        
+        .table td {
+            border-color: var(--border-color);
+        }
+        
+        .positive-change {
+            color: #00ff9d;
+            font-weight: bold;
+        }
+        
+        .negative-change {
+            color: #ff4d4d;
+            font-weight: bold;
+        }
+        
+        .market-sentiment {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .sentiment-bullish {
+            background-color: rgba(0, 255, 157, 0.2);
+            color: #00ff9d;
+        }
+        
+        .sentiment-bearish {
+            background-color: rgba(255, 77, 77, 0.2);
+            color: #ff4d4d;
+        }
+        
+        .sentiment-neutral {
+            background-color: rgba(255, 243, 205, 0.2);
+            color: #ffd700;
+        }
+        
+        .prediction-card h6 {
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 8px;
+            margin-bottom: 16px;
+            color: #0d6efd;
+        }
+        
+        .btn-primary {
+            background-color: #0d6efd;
+            border-color: #0d6efd;
+            padding: 10px 20px;
+            font-weight: 500;
+        }
+        
+        .btn-outline-primary {
+            color: #0d6efd;
+            border-color: #0d6efd;
+            padding: 8px 16px;
+        }
+        
+        .btn-outline-primary:hover {
+            background-color: #0d6efd;
+            color: white;
+        }
+        
+        h1, h3 {
+            color: #0d6efd;
+            text-shadow: 0 0 10px rgba(13, 110, 253, 0.3);
+        }
+        
+        .loading, .top20-loading {
+            color: var(--text-color);
+        }
+        
+        .table-responsive {
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--dark-bg);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #0d6efd;
+            border-radius: 5px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #0b5ed7;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Stock Price Predictor</h1>
+        
+        <!-- eToro Virtual Portfolio Login -->
+        <div class="row justify-content-center mb-5">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-body">
+                        <h3 class="card-title mb-4">eToro Virtual Portfolio Login</h3>
+                        <form id="etoroLoginForm">
+                            <div class="mb-3">
+                                <label for="etoroUsername" class="form-label">Username</label>
+                                <input type="text" class="form-control" id="etoroUsername" name="username" placeholder="Enter eToro username" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="etoroPassword" class="form-label">Password</label>
+                                <input type="password" class="form-control" id="etoroPassword" name="password" placeholder="Enter eToro password" required>
+                            </div>
+                            <div class="text-center">
+                                <button type="submit" class="btn btn-primary">Login to eToro</button>
+                            </div>
+                        </form>
+                        <div class="etoro-loading" style="display: none;">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Logging in to eToro...</p>
+                        </div>
+                        <div class="etoro-error alert alert-danger mt-3" style="display: none;"></div>
+                        <div class="etoro-success alert alert-success mt-3" style="display: none;">
+                            <strong>Successfully logged in!</strong>
+                            <p class="mb-0">Virtual Portfolio Balance: $<span id="etoroBalance">0.00</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Individual Stock Prediction -->
+        <div class="row justify-content-center mb-5">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-body">
+                        <h3 class="card-title mb-4">Single Stock Prediction</h3>
+                        <form id="predictionForm">
+                            <div class="mb-3">
+                                <label for="symbol" class="form-label">Stock Symbol</label>
+                                <input type="text" class="form-control" id="symbol" name="symbol" placeholder="Enter stock symbol (e.g., IBM)" required>
+                            </div>
+                            <div class="text-center">
+                                <button type="submit" class="btn btn-primary">Predict Next Day Price</button>
+                            </div>
+                        </form>
+
+                        <div class="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Fetching data and training model...</p>
+                        </div>
+
+                        <div class="error-message alert alert-danger"></div>
+
+                        <div class="result-card card mt-4">
+                            <div class="card-body">
+                                <div class="data-source-indicator alert mb-3" style="display: none;">
+                                    <span class="badge"></span>
+                                    <span class="data-source-text"></span>
+                                </div>
+                                <h5 class="card-title">Prediction Results</h5>
+                                <div class="card-text">
+                                    <p><strong>Symbol:</strong> <span id="resultSymbol"></span></p>
+                                    <p><strong>Last Update:</strong> <span id="resultDate"></span></p>
+                                    
+                                    <h6 class="mt-4">Today's Data</h6>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <p><strong>Open:</strong> $<span id="todayOpen"></span></p>
+                                            <p><strong>Close:</strong> $<span id="todayClose"></span></p>
+                                            <p><strong>Change:</strong> <span id="todayChange"></span>%</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <p><strong>High:</strong> $<span id="todayHigh"></span></p>
+                                            <p><strong>Low:</strong> $<span id="todayLow"></span></p>
+                                            <p><strong>Volume:</strong> <span id="todayVolume"></span></p>
+                                        </div>
+                                    </div>
+
+                                    <h6 class="mt-4">Tomorrow's Prediction</h6>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <p><strong>Predicted Price:</strong> $<span id="tomorrowPrice"></span></p>
+                                            <p><strong>Predicted Change:</strong> <span id="tomorrowChange"></span>%</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <p><strong>Market Sentiment:</strong> <span id="marketSentiment"></span></p>
+                                            <p><strong>Recommendation:</strong> <span id="recommendation"></span></p>
+                                        </div>
+                                    </div>
+
+                                    <!-- Enhanced Trading Recommendations -->
+                                    <h6 class="mt-4">Trading Analysis</h6>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <p><strong>Model Confidence:</strong> <span id="modelConfidence"></span>%</p>
+                                            <p><strong>Recommended Position Size:</strong> <span id="positionSize"></span>% of portfolio</p>
+                                            <p><strong>Risk/Reward Ratio:</strong> <span id="riskReward"></span></p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <p><strong>Suggested Stop Loss:</strong> <span id="stopLoss"></span>%</p>
+                                            <p><strong>Take Profit Target:</strong> <span id="takeProfit"></span>%</p>
+                                            <p><strong>Trend Strength:</strong> <span id="trendStrength"></span></p>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- eToro Trading Actions -->
+                                    <div id="etoroTrading" class="mt-4" style="display: none;">
+                                        <h6 class="mb-3">eToro Virtual Trading</h6>
+                                        <div class="d-flex justify-content-center gap-2">
+                                            <button class="btn btn-success" onclick="executeTrade(true)">
+                                                Buy Stock
+                                            </button>
+                                            <button class="btn btn-danger" onclick="executeTrade(false)">
+                                                Sell Stock
+                                            </button>
+                                            <button class="btn btn-primary" onclick="executeAutomatedTrade()">
+                                                Auto Trade
+                                            </button>
+                                        </div>
+                                        <div class="trade-status mt-3"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Top 20 Predictions -->
+        <div class="top-predictions">
+            <div class="d-flex justify-content-between align-items-center">
+                <h3>Top 20 Predicted Returns</h3>
+                <button id="refreshTop20" class="btn btn-outline-primary refresh-button">
+                    <span class="refresh-text">Refresh Predictions</span>
+                    <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                </button>
+            </div>
+            
+            <div class="top20-loading text-center" style="display: none;">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2">Fetching predictions for multiple stocks...</p>
+            </div>
+
+            <div class="top20-error alert alert-danger" style="display: none;"></div>
+
+            <div class="table-responsive prediction-table">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Symbol</th>
+                            <th>Today's Open</th>
+                            <th>Today's Close</th>
+                            <th>Today's Change</th>
+                            <th>Tomorrow's Price</th>
+                            <th>Tomorrow's Change</th>
+                            <th>Sentiment</th>
+                        </tr>
+                    </thead>
+                    <tbody id="top20Table">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Add eToro login handling
+        document.getElementById('etoroLoginForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const username = document.getElementById('etoroUsername').value;
+            const password = document.getElementById('etoroPassword').value;
+            const loadingDiv = document.querySelector('.etoro-loading');
+            const errorDiv = document.querySelector('.etoro-error');
+            const successDiv = document.querySelector('.etoro-success');
+            const tradingDiv = document.getElementById('etoroTrading');
+            
+            // Reset display
+            errorDiv.style.display = 'none';
+            successDiv.style.display = 'none';
+            loadingDiv.style.display = 'block';
+            
+            try {
+                const response = await fetch('/etoro-login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('etoroBalance').textContent = data.balance.toFixed(2);
+                    successDiv.style.display = 'block';
+                    tradingDiv.style.display = 'block';
+                    // Hide the form after successful login
+                    this.style.display = 'none';
+                } else {
+                    errorDiv.textContent = data.error || 'Login failed. Please check your credentials.';
+                    errorDiv.style.display = 'block';
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Error connecting to server: ' + error.message;
+                errorDiv.style.display = 'block';
+            } finally {
+                loadingDiv.style.display = 'none';
+            }
+        });
+
+        async function executeTrade(isBuy) {
+            const symbol = document.getElementById('resultSymbol').textContent;
+            const statusDiv = document.querySelector('.trade-status');
+            
+            try {
+                const response = await fetch('/etoro-trade', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        symbol,
+                        isBuy
+                    })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.innerHTML = `<div class="alert alert-success">
+                        Successfully ${isBuy ? 'bought' : 'sold'} ${symbol}. New balance: $${data.newBalance.toFixed(2)}
+                    </div>`;
+                    document.getElementById('etoroBalance').textContent = data.newBalance.toFixed(2);
+                } else {
+                    statusDiv.innerHTML = `<div class="alert alert-danger">
+                        Trade failed: ${data.error}
+                    </div>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="alert alert-danger">
+                    Error executing trade: ${error.message}
+                </div>`;
+            }
+        }
+
+        async function executeAutomatedTrade() {
+            const symbol = document.getElementById('resultSymbol').textContent;
+            const predictedChange = parseFloat(document.getElementById('tomorrowChange').textContent);
+            const statusDiv = document.querySelector('.trade-status');
+            
+            try {
+                const response = await fetch('/etoro-auto-trade', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        symbol,
+                        predictedChange
+                    })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.innerHTML = `<div class="alert alert-success">
+                        Successfully executed automated trade for ${symbol}. New balance: $${data.newBalance.toFixed(2)}
+                    </div>`;
+                    document.getElementById('etoroBalance').textContent = data.newBalance.toFixed(2);
+                } else {
+                    statusDiv.innerHTML = `<div class="alert alert-danger">
+                        Automated trade failed: ${data.error}
+                    </div>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="alert alert-danger">
+                    Error executing automated trade: ${error.message}
+                </div>`;
+            }
+        }
+
+        document.getElementById('predictionForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const symbol = document.getElementById('symbol').value.toUpperCase();
+            const loadingDiv = document.querySelector('.loading');
+            const resultCard = document.querySelector('.result-card');
+            const errorMessage = document.querySelector('.error-message');
+            
+            // Reset display
+            resultCard.style.display = 'none';
+            errorMessage.style.display = 'none';
+            loadingDiv.style.display = 'block';
+            
+            try {
+                const response = await fetch(`/predict?symbol=${symbol}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('resultSymbol').textContent = data.symbol;
+                    document.getElementById('resultDate').textContent = data.date;
+                    
+                    // Today's data
+                    document.getElementById('todayOpen').textContent = data.todayOpen.toFixed(2);
+                    document.getElementById('todayClose').textContent = data.todayClose.toFixed(2);
+                    document.getElementById('todayHigh').textContent = data.todayHigh.toFixed(2);
+                    document.getElementById('todayLow').textContent = data.todayLow.toFixed(2);
+                    document.getElementById('todayVolume').textContent = data.todayVolume.toLocaleString();
+                    
+                    const todayChangeEl = document.getElementById('todayChange');
+                    todayChangeEl.textContent = (data.todayChange >= 0 ? '+' : '') + data.todayChange.toFixed(2);
+                    todayChangeEl.className = data.todayChange >= 0 ? 'positive-change' : 'negative-change';
+                    
+                    // Tomorrow's predictions
+                    document.getElementById('tomorrowPrice').textContent = data.tomorrowPrice.toFixed(2);
+                    const tomorrowChangeEl = document.getElementById('tomorrowChange');
+                    tomorrowChangeEl.textContent = (data.tomorrowChange >= 0 ? '+' : '') + data.tomorrowChange.toFixed(2);
+                    tomorrowChangeEl.className = data.tomorrowChange >= 0 ? 'positive-change' : 'negative-change';
+                    
+                    // Market analysis
+                    const marketSentiment = document.getElementById('marketSentiment');
+                    marketSentiment.textContent = data.marketSentiment;
+                    marketSentiment.className = `market-sentiment sentiment-${data.marketSentiment.toLowerCase()}`;
+                    
+                    // Enhanced trading signals
+                    document.getElementById('modelConfidence').textContent = (data.tradingSignals.overallConfidence * 100).toFixed(1);
+                    document.getElementById('positionSize').textContent = (data.tradingSignals.recommendedPositionSize * 100).toFixed(1);
+                    document.getElementById('riskReward').textContent = data.tradingSignals.riskRewardRatio.toFixed(2);
+                    document.getElementById('stopLoss').textContent = data.tradingSignals.stopLossPercent.toFixed(1);
+                    document.getElementById('takeProfit').textContent = data.tradingSignals.takeProfitPercent.toFixed(1);
+                    document.getElementById('trendStrength').textContent = data.tradingSignals.trendStrength.toFixed(2);
+                    
+                    const recommendation = document.getElementById('recommendation');
+                    recommendation.textContent = data.tradingSignals.recommendation;
+                    recommendation.className = data.tradingSignals.recommendation.toLowerCase().includes('buy') ? 'positive-change' :
+                                             data.tradingSignals.recommendation.toLowerCase().includes('sell') ? 'negative-change' : '';
+                    
+                    // Update data source indicator
+                    const dataSourceIndicator = document.querySelector('.data-source-indicator');
+                    const dataSourceBadge = dataSourceIndicator.querySelector('.badge');
+                    const dataSourceText = dataSourceIndicator.querySelector('.data-source-text');
+                    
+                    if (data.isMockData) {
+                        dataSourceIndicator.className = 'data-source-indicator alert alert-warning mb-3';
+                        dataSourceBadge.className = 'badge bg-warning text-dark';
+                        dataSourceBadge.textContent = 'MOCK DATA';
+                        dataSourceText.textContent = ' Using generated mock data for testing purposes';
+                    } else {
+                        dataSourceIndicator.className = 'data-source-indicator alert alert-info mb-3';
+                        dataSourceBadge.className = 'badge bg-info';
+                        dataSourceBadge.textContent = 'REAL DATA';
+                        dataSourceText.textContent = ' Using real market data from Alpha Vantage API';
+                    }
+                    dataSourceIndicator.style.display = 'block';
+
+                    resultCard.style.display = 'block';
+                } else {
+                    errorMessage.textContent = data.error;
+                    errorMessage.style.display = 'block';
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Error connecting to server: ' + error.message;
+                errorMessage.style.display = 'block';
+            } finally {
+                loadingDiv.style.display = 'none';
+            }
+        });
+
+        async function fetchTop20Predictions() {
+            const loadingDiv = document.querySelector('.top20-loading');
+            const errorDiv = document.querySelector('.top20-error');
+            const refreshBtn = document.getElementById('refreshTop20');
+            const spinner = refreshBtn.querySelector('.spinner-border');
+            const refreshText = refreshBtn.querySelector('.refresh-text');
+            
+            // Reset display
+            errorDiv.style.display = 'none';
+            loadingDiv.style.display = 'block';
+            refreshBtn.disabled = true;
+            spinner.classList.remove('d-none');
+            refreshText.textContent = 'Refreshing...';
+            
+            try {
+                const response = await fetch('/top-predictions');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const tableBody = document.getElementById('top20Table');
+                    tableBody.innerHTML = '';
+                    
+                    data.predictions.forEach((prediction, index) => {
+                        const row = document.createElement('tr');
+                        
+                        row.innerHTML = `
+                            <td>${index + 1}</td>
+                            <td><strong>${prediction.symbol}</strong></td>
+                            <td>$${prediction.todayOpen.toFixed(2)}</td>
+                            <td>$${prediction.todayClose.toFixed(2)}</td>
+                            <td class="${prediction.todayChange >= 0 ? 'positive-change' : 'negative-change'}">
+                                ${prediction.todayChange >= 0 ? '+' : ''}${prediction.todayChange.toFixed(2)}%
+                            </td>
+                            <td>$${prediction.tomorrowPrice.toFixed(2)}</td>
+                            <td class="${prediction.tomorrowChange >= 0 ? 'positive-change' : 'negative-change'}">
+                                ${prediction.tomorrowChange >= 0 ? '+' : ''}${prediction.tomorrowChange.toFixed(2)}%
+                            </td>
+                            <td>${prediction.marketSentiment}</td>
+                        `;
+                        
+                        // Add sentiment styling to the table cell
+                        const sentimentCell = row.querySelector('td:last-child');
+                        sentimentCell.className = `market-sentiment sentiment-${prediction.marketSentiment.toLowerCase()}`;
+                        
+                        tableBody.appendChild(row);
+                    });
+                } else {
+                    errorDiv.textContent = data.error;
+                    errorDiv.style.display = 'block';
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Error connecting to server: ' + error.message;
+                errorDiv.style.display = 'block';
+            } finally {
+                loadingDiv.style.display = 'none';
+                refreshBtn.disabled = false;
+                spinner.classList.add('d-none');
+                refreshText.textContent = 'Refresh Predictions';
+            }
+        }
+
+        document.getElementById('refreshTop20').addEventListener('click', fetchTop20Predictions);
+        
+        // Initial load of top 20 predictions
+        fetchTop20Predictions();
+    </script>
+</body>
+</html> 

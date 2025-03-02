@@ -1,0 +1,22 @@
+# Alpha Vantage API Configuration
+api.key=YOUR_API_KEY_HERE
+
+# Data Storage Configuration
+data.directory=data
+data.csv.directory=${data.directory}/csv
+data.json.directory=${data.directory}/json
+
+# Cache Configuration
+cache.duration.hours=24
+
+# API Rate Limits
+api.calls.per.minute=5
+api.calls.per.day=500
+
+# eToro Virtual Portfolio Configuration
+etoro.username=YOUR_ETORO_USERNAME
+etoro.password=YOUR_ETORO_PASSWORD
+
+# Wall Street Survivor Configuration
+wss.username=YOUR_WSS_USERNAME
+wss.password=YOUR_WSS_PASSWORD
