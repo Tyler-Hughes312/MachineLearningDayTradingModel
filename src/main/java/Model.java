@@ -34,8 +34,11 @@ public class Model {
     private static final int MACD_SLOW = 26;   // MACD slow period
     private static final int MACD_SIGNAL = 9;  // MACD signal period
 
+    private double lastCorrelationCoefficient;
+
     public Model() {
         initializeAttributes();
+        this.lastCorrelationCoefficient = 0.0;
     }
 
     private void initializeAttributes() {
@@ -58,6 +61,12 @@ public class Model {
         // Create empty dataset with our attributes
         trainingData = new Instances("StockPrediction", attributes, 0);
         trainingData.setClassIndex(trainingData.numAttributes() - 1);  // Set target attribute
+
+        // Ensure we have enough data
+        if (stockData == null || stockData.size() < MACD_SLOW + MACD_SIGNAL) {
+            System.err.println("Not enough data points for training. Need at least " + (MACD_SLOW + MACD_SIGNAL) + " points.");
+            return;
+        }
 
         // Calculate technical indicators and add instances
         List<Double> closePrices = new ArrayList<>();
@@ -97,6 +106,7 @@ public class Model {
                 trainingData.add(new DenseInstance(1.0, values));
             } catch (Exception e) {
                 System.err.println("Error processing data point at index " + i + ": " + e.getMessage());
+                e.printStackTrace();
             }
         }
         
@@ -104,23 +114,37 @@ public class Model {
     }
 
     private double calculateSMA(List<Double> prices, int currentIndex, int period) {
+        // Ensure we have enough data points
+        if (currentIndex < period - 1 || currentIndex >= prices.size()) {
+            return prices.get(prices.size() - 1); // Return last available price if not enough data
+        }
+        
         double sum = 0;
         for (int i = currentIndex - period + 1; i <= currentIndex; i++) {
-            sum += prices.get(i);
+            if (i >= 0 && i < prices.size()) {
+                sum += prices.get(i);
+            }
         }
         return sum / period;
     }
 
     private double calculateRSI(List<Double> prices, int currentIndex, int period) {
+        // Ensure we have enough data points
+        if (currentIndex < period || currentIndex >= prices.size()) {
+            return 50.0; // Return neutral RSI if not enough data
+        }
+        
         double gains = 0;
         double losses = 0;
         
         for (int i = currentIndex - period + 1; i <= currentIndex; i++) {
-            double difference = prices.get(i) - prices.get(i - 1);
-            if (difference >= 0) {
-                gains += difference;
-            } else {
-                losses -= difference;
+            if (i > 0 && i < prices.size()) { // Check if we have a previous price to compare with
+                double difference = prices.get(i) - prices.get(i - 1);
+                if (difference >= 0) {
+                    gains += difference;
+                } else {
+                    losses -= difference;
+                }
             }
         }
         
@@ -131,16 +155,23 @@ public class Model {
     }
 
     private double[] calculateMACD(List<Double> prices, int currentIndex) {
+        // Ensure we have enough data points for both fast and slow EMAs
+        if (currentIndex < MACD_SLOW || currentIndex >= prices.size()) {
+            return new double[]{0.0, 0.0}; // Return neutral values if not enough data
+        }
+        
         double fastEMA = calculateEMA(prices, currentIndex, MACD_FAST);
         double slowEMA = calculateEMA(prices, currentIndex, MACD_SLOW);
         double macd = fastEMA - slowEMA;
         
         // Calculate signal line (9-day EMA of MACD)
         List<Double> macdValues = new ArrayList<>();
-        for (int i = currentIndex - MACD_SIGNAL + 1; i <= currentIndex; i++) {
-            double fast = calculateEMA(prices, i, MACD_FAST);
-            double slow = calculateEMA(prices, i, MACD_SLOW);
-            macdValues.add(fast - slow);
+        for (int i = Math.max(0, currentIndex - MACD_SIGNAL + 1); i <= currentIndex; i++) {
+            if (i >= MACD_FAST && i >= MACD_SLOW && i < prices.size()) {
+                double fast = calculateEMA(prices, i, MACD_FAST);
+                double slow = calculateEMA(prices, i, MACD_SLOW);
+                macdValues.add(fast - slow);
+            }
         }
         
         double signal = calculateEMAFromList(macdValues, MACD_SIGNAL);
@@ -149,6 +180,11 @@ public class Model {
     }
 
     private double calculateEMA(List<Double> prices, int currentIndex, int period) {
+        // Ensure we have enough data points
+        if (currentIndex < period - 1) {
+            return prices.get(currentIndex); // Return current price if not enough data
+        }
+        
         // Calculate SMA first
         double sma = 0;
         for (int i = currentIndex - period + 1; i <= currentIndex; i++) {
@@ -168,6 +204,10 @@ public class Model {
     }
 
     private double calculateEMAFromList(List<Double> values, int period) {
+        if (values.isEmpty()) {
+            return 0.0; // Return neutral value if no data
+        }
+        
         // Calculate SMA first
         double sma = 0;
         for (int i = 0; i < period && i < values.size(); i++) {
@@ -199,6 +239,9 @@ public class Model {
             Evaluation eval = new Evaluation(trainingData);
             eval.crossValidateModel(classifier, trainingData, 10, new Random(1));
             
+            // Store the correlation coefficient
+            this.lastCorrelationCoefficient = eval.correlationCoefficient();
+            
             // Print evaluation metrics
             System.out.println("\nModel Evaluation Results:");
             System.out.println("Correlation coefficient: " + eval.correlationCoefficient());
@@ -213,9 +256,18 @@ public class Model {
         }
     }
 
+    public double getLastEvaluationCorrelation() {
+        return this.lastCorrelationCoefficient;
+    }
+
     public double predictNextDayPrice(StockDataManager.StockEntry lastEntry, 
                                     List<StockDataManager.StockEntry> historicalData) {
         try {
+            // Ensure we have enough historical data
+            if (historicalData == null || historicalData.size() < MACD_SLOW) {
+                return lastEntry.close; // Return current price if not enough data
+            }
+
             // Prepare the instance for prediction
             double[] values = new double[trainingData.numAttributes()];
             values[0] = lastEntry.open;
@@ -241,15 +293,128 @@ public class Model {
             Instance predictionInstance = new DenseInstance(1.0, values);
             predictionInstance.setDataset(trainingData);
             
-            // Make prediction
-            double prediction = classifier.classifyInstance(predictionInstance);
+            // Make base prediction
+            double rawPrediction = classifier.classifyInstance(predictionInstance);
             
-            return prediction;
+            // Check if market is closed
+            java.time.LocalTime currentTime = java.time.LocalTime.now();
+            java.time.LocalTime marketOpen = java.time.LocalTime.of(9, 30);  // Market opens at 9:30 AM
+            java.time.LocalTime marketClose = java.time.LocalTime.of(16, 0); // Market closes at 4:00 PM
+            boolean isMarketClosed = currentTime.isAfter(marketClose) || currentTime.isBefore(marketOpen);
+            
+            if (isMarketClosed) {
+                // When market is closed, predict next day's opening price
+                // Calculate overnight sentiment based on technical indicators
+                double sentimentAdjustment = 0.0;
+                
+                // RSI-based adjustment (stronger influence)
+                if (values[6] > 70) {
+                    sentimentAdjustment -= 0.02; // Overbought, expect decline
+                } else if (values[6] < 30) {
+                    sentimentAdjustment += 0.02; // Oversold, expect rise
+                }
+                
+                // MACD-based adjustment (stronger influence)
+                if (values[7] > values[8]) {
+                    sentimentAdjustment += 0.015; // Bullish MACD crossover
+                } else if (values[7] < values[8]) {
+                    sentimentAdjustment -= 0.015; // Bearish MACD crossover
+                }
+                
+                // SMA trend adjustment (stronger influence)
+                if (values[3] > values[5]) {
+                    sentimentAdjustment += 0.01; // Price above SMA, bullish trend
+                } else if (values[3] < values[5]) {
+                    sentimentAdjustment -= 0.01; // Price below SMA, bearish trend
+                }
+                
+                // Calculate overnight volatility (using previous day's range)
+                double previousDayRange = lastEntry.high - lastEntry.low;
+                double volatilityFactor = previousDayRange / lastEntry.close;
+                
+                // Apply sentiment and volatility adjustments to the prediction
+                double adjustedPrediction = rawPrediction * (1 + sentimentAdjustment);
+                
+                // Calculate the expected overnight movement
+                double expectedMovement = (adjustedPrediction - lastEntry.close) * (1 + volatilityFactor);
+                
+                // Calculate final prediction for next day's open
+                double finalPrediction = lastEntry.close + expectedMovement;
+                
+                // Ensure prediction is reasonable but allow for larger movements
+                double maxDeviation = 0.05; // 5% maximum deviation for overnight
+                double currentPrice = lastEntry.close;
+                double minPrediction = currentPrice * (1 - maxDeviation);
+                double maxPrediction = currentPrice * (1 + maxDeviation);
+                
+                return Math.min(Math.max(finalPrediction, minPrediction), maxPrediction);
+            } else {
+                // Market is open - predict end of day price
+                // Calculate remaining trading time as a percentage of the trading day
+                double tradingDayMinutes = 390.0; // 6.5 hours * 60 minutes
+                double remainingMinutes = 0.0;
+                
+                if (currentTime.isBefore(marketOpen)) {
+                    remainingMinutes = tradingDayMinutes; // Full day if before market open
+                } else {
+                    remainingMinutes = java.time.Duration.between(currentTime, marketClose).toMinutes();
+                }
+                
+                double timeFactor = remainingMinutes / tradingDayMinutes;
+                
+                // Apply market sentiment adjustment based on technical indicators
+                double sentimentAdjustment = 0.0;
+                
+                // RSI-based adjustment (stronger influence)
+                if (values[6] > 70) {
+                    sentimentAdjustment -= 0.03; // Overbought, expect decline
+                } else if (values[6] < 30) {
+                    sentimentAdjustment += 0.03; // Oversold, expect rise
+                }
+                
+                // MACD-based adjustment (stronger influence)
+                if (values[7] > values[8]) {
+                    sentimentAdjustment += 0.02; // Bullish MACD crossover
+                } else if (values[7] < values[8]) {
+                    sentimentAdjustment -= 0.02; // Bearish MACD crossover
+                }
+                
+                // SMA trend adjustment (stronger influence)
+                if (values[3] > values[5]) {
+                    sentimentAdjustment += 0.015; // Price above SMA, bullish trend
+                } else if (values[3] < values[5]) {
+                    sentimentAdjustment -= 0.015; // Price below SMA, bearish trend
+                }
+                
+                // Calculate intraday volatility
+                double intradayRange = lastEntry.high - lastEntry.low;
+                double volatilityFactor = intradayRange / lastEntry.close;
+                
+                // Apply time-based and sentiment adjustments to the prediction
+                double adjustedPrediction = rawPrediction * (1 + sentimentAdjustment);
+                
+                // Calculate the expected movement based on remaining time and volatility
+                double expectedMovement = (adjustedPrediction - lastEntry.close) * timeFactor;
+                
+                // Apply volatility factor to the movement (stronger influence)
+                expectedMovement *= (1 + volatilityFactor * 2);
+                
+                // Calculate final prediction for end of day
+                double finalPrediction = lastEntry.close + expectedMovement;
+                
+                // Ensure prediction is reasonable but allow for larger movements
+                double maxDeviation = 0.15; // 15% maximum deviation
+                double currentPrice = lastEntry.close;
+                double minPrediction = currentPrice * (1 - maxDeviation);
+                double maxPrediction = currentPrice * (1 + maxDeviation);
+                
+                return Math.min(Math.max(finalPrediction, minPrediction), maxPrediction);
+            }
             
         } catch (Exception e) {
             System.err.println("Error making prediction: " + e.getMessage());
             e.printStackTrace();
-            return Double.NaN;
+            return lastEntry.close; // Return current price as fallback
         }
     }
 } 

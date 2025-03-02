@@ -38,6 +38,7 @@ import java.util.Date;
 import java.util.Calendar;
 import java.time.LocalDate;
 import java.util.Random;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class StockDataManager {
     private static final String CONFIG_FILE = "config.properties";
@@ -101,26 +102,55 @@ public class StockDataManager {
 
     // Inner class to represent a stock entry
     public static class StockEntry {
-        public String date;  // Changed to public
-        public double open;  // Changed to public
-        public double high;  // Changed to public
-        public double low;   // Changed to public
-        public double close; // Changed to public
-        public double volume; // Changed to public
+        public String date;
+        public double open;
+        public double high;
+        public double low;
+        public double close;
+        public double volume;
+        public boolean isMockData;
+        public double predictedClose;
+        public int rank;                 // Added for ranking
+        public double change;            // Added for price change
+        public String sentiment;         // Added for market sentiment
+        public String recommendation;    // Added for trading recommendation
+        public double confidence;        // Added for prediction confidence
 
         public StockEntry(String date, double open, double high, double low, double close, double volume) {
+            this(date, open, high, low, close, volume, false);
+        }
+
+        public StockEntry(String date, double open, double high, double low, double close, double volume, boolean isMockData) {
+            this(date, open, high, low, close, volume, isMockData, Double.NaN);
+        }
+
+        public StockEntry(String date, double open, double high, double low, double close, double volume, boolean isMockData, double predictedClose) {
+            this(date, open, high, low, close, volume, isMockData, predictedClose, 0, 0.0, "Unknown", "Unknown", 0.0);
+        }
+
+        public StockEntry(String date, double open, double high, double low, double close, double volume, 
+                         boolean isMockData, double predictedClose, int rank, double change,
+                         String sentiment, String recommendation, double confidence) {
             this.date = date;
             this.open = open;
             this.high = high;
             this.low = low;
             this.close = close;
             this.volume = volume;
+            this.isMockData = isMockData;
+            this.predictedClose = predictedClose;
+            this.rank = rank;
+            this.change = change;
+            this.sentiment = sentiment;
+            this.recommendation = recommendation;
+            this.confidence = confidence;
         }
 
         @Override
         public String toString() {
-            return String.format("%s, %.2f, %.2f, %.2f, %.2f, %.0f",
-                    date, open, high, low, close, volume);
+            String predictionStr = Double.isNaN(predictedClose) ? "N/A" : String.format("%.2f", predictedClose);
+            return String.format("%d, %s, %.2f, %.2f, %.2f%%, %s, %s, %.1f%%, %.2f",
+                    rank, date, open, close, change, sentiment, recommendation, confidence * 100, predictedClose);
         }
     }
 
@@ -137,7 +167,7 @@ public class StockDataManager {
             
             StockDataManager manager = new StockDataManager(apiKey);
             manager.fetchAndSaveStockData("IBM");
-            List<StockEntry> data = processData(manager.getOutputFile());
+            List<StockEntry> data = processData(manager.getOutputFile(), manager.symbol);
             System.out.println(toString(data));
             createAndShowCharts(data);
         } catch (IOException e) {
@@ -147,12 +177,17 @@ public class StockDataManager {
     }
 
     private boolean isDataCacheValid() throws IOException {
-        if (!jsonFile.exists() || jsonFile.length() == 0) {
+        if (!csvFile.exists() || !jsonFile.exists()) {
             return false;
         }
 
-        // Check if the file was modified within the cache duration
-        long lastModified = jsonFile.lastModified();
+        // Check if both files have content
+        if (csvFile.length() == 0 || jsonFile.length() == 0) {
+            return false;
+        }
+
+        // Check if the files were modified within the cache duration
+        long lastModified = Math.max(csvFile.lastModified(), jsonFile.lastModified());
         long currentTime = System.currentTimeMillis();
         long hoursSinceModified = (currentTime - lastModified) / (60 * 60 * 1000);
 
@@ -165,7 +200,7 @@ public class StockDataManager {
             return null;
         }
         
-        List<StockEntry> data = processData(jsonFile.toString());
+        List<StockEntry> data = processData(jsonFile.toString(), symbol);
         if (!data.isEmpty()) {
             System.out.println("Loaded " + data.size() + " entries for " + jsonFile.getName() + 
                              ", most recent date: " + data.get(0).date);
@@ -174,45 +209,99 @@ public class StockDataManager {
     }
 
     public List<StockEntry> fetchAndSaveStockData(String symbol) throws IOException {
+        setSymbol(symbol); // Ensure paths are set correctly
+        
+        // First check if we have valid cached data
+        if (isDataCacheValid()) {
+            try {
+                List<StockEntry> cachedData = loadCachedData();
+                if (cachedData != null && !cachedData.isEmpty()) {
+                    // Check if the most recent data is from today or yesterday
+                    LocalDate mostRecentDate = LocalDate.parse(cachedData.get(0).date);
+                    LocalDate today = LocalDate.now();
+                    if (mostRecentDate.equals(today) || mostRecentDate.equals(today.minusDays(1))) {
+                        System.out.println("Using recent cached data for " + symbol);
+                        this.usingMockData = false;
+                        return cachedData;
+                    }
+                }
+            } catch (Exception e) {
+                System.out.println("Error loading cached data: " + e.getMessage());
+            }
+        }
+
+        // If we don't have valid cached data, try the API
         try {
-            // Try to fetch from API first
             String response = fetchDataFromAPI(symbol);
             
-            // Check if response contains rate limit message
-            if (response != null && response.contains("standard API rate limit")) {
-                this.usingMockData = true;
-                List<StockEntry> mockData = generateMockData(symbol);
-                saveMockDataToFile(mockData, symbol);
-                return mockData;
+            // Parse the response to check for error messages
+            JsonObject root = new Gson().fromJson(response, JsonObject.class);
+            
+            // Check for API error messages
+            if (root.has("Error Message")) {
+                System.out.println("API Error for " + symbol + ": " + root.get("Error Message").getAsString());
+                return fallbackToMockOrCachedData(symbol);
             }
             
-            if (response != null && !response.isEmpty()) {
+            // Check for rate limit
+            if (root.has("Note") && root.get("Note").getAsString().contains("API call frequency")) {
+                System.out.println("Rate limit reached for " + symbol + ", checking cached data...");
+                List<StockEntry> cachedData = loadCachedData();
+                if (cachedData != null && !cachedData.isEmpty()) {
+                    System.out.println("Using cached data for " + symbol + " due to rate limit");
+                    this.usingMockData = false;
+                    return cachedData;
+                }
+                
+                // If no cached data, wait and retry
+                System.out.println("No cached data available, waiting 60 seconds before retry...");
+                Thread.sleep(60000);
+                response = fetchDataFromAPI(symbol);
+                root = new Gson().fromJson(response, JsonObject.class);
+            }
+            
+            // Check if we have valid time series data
+            if (root.has("Time Series (Daily)")) {
                 this.usingMockData = false;
                 saveToFile(response, symbol);
-                return processData(getOutputFile());
+                List<StockEntry> data = processData(getOutputFile(), symbol);
+                System.out.println("Successfully fetched real data for " + symbol);
+                return data;
             } else {
-                // If API fails, generate and save mock data
-                this.usingMockData = true;
-                List<StockEntry> mockData = generateMockData(symbol);
-                saveMockDataToFile(mockData, symbol);
-                return mockData;
+                return fallbackToMockOrCachedData(symbol);
             }
         } catch (Exception e) {
-            System.out.println("Using mock data for " + symbol + " due to API error: " + e.getMessage());
-            this.usingMockData = true;
-            List<StockEntry> mockData = generateMockData(symbol);
-            saveMockDataToFile(mockData, symbol);
-            return mockData;
+            System.out.println("Error fetching data for " + symbol + ": " + e.getMessage());
+            return fallbackToMockOrCachedData(symbol);
         }
+    }
+
+    private List<StockEntry> fallbackToMockOrCachedData(String symbol) throws IOException {
+        // First try to use cached data if available
+        List<StockEntry> cachedData = loadCachedData();
+        if (cachedData != null && !cachedData.isEmpty()) {
+            System.out.println("Using cached data for " + symbol);
+            this.usingMockData = false;
+            return cachedData;
+        }
+
+        // If no cached data available, use mock data
+        System.out.println("No cached data available for " + symbol + ", using mock data");
+        this.usingMockData = true;
+        List<StockEntry> mockData = generateMockData(symbol);
+        saveMockDataToFile(mockData, symbol);
+        return mockData;
     }
     
     private String fetchDataFromAPI(String symbol) throws IOException {
-        String urlStr = String.format("https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=%s&apikey=%s",
+        String urlStr = String.format("https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=%s&apikey=%s&outputsize=full",
                 symbol, apiKey);
         
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
+        conn.setConnectTimeout(10000);  // 10 second timeout for connection
+        conn.setReadTimeout(10000);     // 10 second timeout for reading
         
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream()))) {
@@ -244,7 +333,7 @@ public class StockDataManager {
         }
         
         // Process and save as CSV
-        List<StockEntry> entries = processData(jsonFile.toString());
+        List<StockEntry> entries = processData(jsonFile.toString(), symbol);
         try (FileWriter writer = new FileWriter(csvFile)) {
             writer.write("Date,Open,High,Low,Close,Volume\n"); // CSV header
             for (StockEntry entry : entries) {
@@ -254,11 +343,162 @@ public class StockDataManager {
         }
     }
     
-    private static List<StockEntry> generateMockData(String symbol) {
+    public static List<StockEntry> processData(String filePath, String symbol) throws IOException {
+        List<StockEntry> entries = new CopyOnWriteArrayList<>();
+        
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String content = reader.lines().collect(java.util.stream.Collectors.joining("\n"));
+            JsonObject root = new Gson().fromJson(content, JsonObject.class);
+            
+            if (root.has("Time Series (Daily)")) {
+                JsonObject timeSeries = root.getAsJsonObject("Time Series (Daily)");
+                List<StockEntry> tempEntries = new ArrayList<>();
+                
+                // First pass: create all entries
+                timeSeries.entrySet().forEach(entry -> {
+                    String date = entry.getKey();
+                    JsonObject dailyData = entry.getValue().getAsJsonObject();
+                    
+                    try {
+                        double open = Double.parseDouble(dailyData.get("1. open").getAsString());
+                        double high = Double.parseDouble(dailyData.get("2. high").getAsString());
+                        double low = Double.parseDouble(dailyData.get("3. low").getAsString());
+                        double close = Double.parseDouble(dailyData.get("4. close").getAsString());
+                        double volume = Double.parseDouble(dailyData.get("5. volume").getAsString());
+                        
+                        // Calculate change percentage
+                        double change = ((close - open) / open) * 100;
+                        
+                        // Determine sentiment based on price movement
+                        String sentiment = determineSentiment(change);
+                        
+                        tempEntries.add(new StockEntry(
+                            date,
+                            open,
+                            high,
+                            low,
+                            close,
+                            volume,
+                            false,  // Not mock data
+                            Double.NaN,  // Prediction will be added later
+                            0,  // Rank will be set later
+                            change,
+                            sentiment,
+                            "Unknown",  // Recommendation will be set later
+                            0.0  // Confidence will be set later
+                        ));
+                    } catch (NumberFormatException e) {
+                        System.err.println("Error parsing number for date " + date + ": " + e.getMessage());
+                    }
+                });
+
+                // Sort entries by date (newest first)
+                tempEntries.sort((a, b) -> b.date.compareTo(a.date));
+
+                // Create model and calculate predictions
+                Model model = new Model();
+                model.prepareData(tempEntries);
+                model.trainModel();
+
+                // Second pass: add predictions and calculate recommendations
+                for (int i = 0; i < tempEntries.size(); i++) {
+                    StockEntry entry = tempEntries.get(i);
+                    List<StockEntry> historicalData = tempEntries.subList(0, i + 1);
+                    double prediction = model.predictNextDayPrice(entry, historicalData);
+                    
+                    // Calculate confidence based on historical accuracy
+                    double confidence = calculateConfidence(historicalData, model);
+                    
+                    // Determine recommendation based on prediction and confidence
+                    String recommendation = determineRecommendation(entry.close, prediction, confidence);
+                    
+                    entries.add(new StockEntry(
+                        entry.date,
+                        entry.open,
+                        entry.high,
+                        entry.low,
+                        entry.close,
+                        entry.volume,
+                        false,
+                        prediction,
+                        0,  // Rank will be set later
+                        entry.change,
+                        entry.sentiment,
+                        recommendation,
+                        confidence
+                    ));
+                }
+
+                // Sort by change percentage to determine rank
+                entries.sort((a, b) -> Double.compare(Math.abs(b.change), Math.abs(a.change)));
+                for (int i = 0; i < entries.size(); i++) {
+                    StockEntry entry = entries.get(i);
+                    entry.rank = i + 1;
+                }
+            } else {
+                System.out.println("No time series data found for file: " + filePath + ". Generating mock data.");
+                return generateMockData(symbol);
+            }
+        } catch (Exception e) {
+            System.err.println("Error processing data file: " + e.getMessage());
+            System.out.println("Falling back to mock data generation.");
+            return generateMockData(symbol);
+        }
+        
+        return entries;
+    }
+
+    private static String determineSentiment(double change) {
+        if (change > 2.0) return "Very Bullish";
+        if (change > 0.5) return "Bullish";
+        if (change < -2.0) return "Very Bearish";
+        if (change < -0.5) return "Bearish";
+        return "Neutral";
+    }
+
+    private static String determineRecommendation(double currentPrice, double predictedPrice, double confidence) {
+        if (Double.isNaN(predictedPrice)) return "Hold";
+        
+        double expectedReturn = ((predictedPrice - currentPrice) / currentPrice) * 100;
+        
+        if (confidence < 0.5) return "Hold";
+        if (expectedReturn > 2.0 && confidence > 0.7) return "Strong Buy";
+        if (expectedReturn > 1.0) return "Buy";
+        if (expectedReturn < -2.0 && confidence > 0.7) return "Strong Sell";
+        if (expectedReturn < -1.0) return "Sell";
+        return "Hold";
+    }
+
+    private static double calculateConfidence(List<StockEntry> historicalData, Model model) {
+        if (historicalData.size() < 2) return 0.0;
+        
+        int correctPredictions = 0;
+        int totalPredictions = 0;
+        
+        for (int i = 1; i < historicalData.size(); i++) {
+            StockEntry previous = historicalData.get(i);
+            StockEntry current = historicalData.get(i-1);
+            
+            if (!Double.isNaN(previous.predictedClose)) {
+                double predictedDirection = previous.predictedClose - previous.close;
+                double actualDirection = current.close - previous.close;
+                
+                if ((predictedDirection > 0 && actualDirection > 0) ||
+                    (predictedDirection < 0 && actualDirection < 0)) {
+                    correctPredictions++;
+                }
+                totalPredictions++;
+            }
+        }
+        
+        return totalPredictions > 0 ? (double) correctPredictions / totalPredictions : 0.0;
+    }
+
+    public static List<StockEntry> generateMockData(String symbol) {
         List<StockEntry> mockData = new ArrayList<>();
         Random random = new Random();
         
-        // Use different base prices for different symbols to make it more realistic
+        // Use different base prices for different symbols
         double basePrice;
         switch(symbol.toUpperCase()) {
             case "AAPL":
@@ -356,18 +596,21 @@ public class StockDataManager {
                 break;
         }
         
-        // Generate 100 days of mock data
+        // Generate 100 days of mock data first without predictions
         for (int i = 0; i < 100; i++) {
             double volatility = 0.02; // 2% daily volatility
-            double dailyVariation = (random.nextGaussian() * volatility); // Normal distribution
+            double dailyVariation = (random.nextGaussian() * volatility);
             double open = basePrice * (1 + dailyVariation);
             double close = open * (1 + (random.nextGaussian() * volatility));
             double high = Math.max(open, close) * (1 + Math.abs(random.nextGaussian() * volatility));
             double low = Math.min(open, close) * (1 - Math.abs(random.nextGaussian() * volatility));
-            long volume = 100000 + (long)(random.nextGaussian() * 500000); // Random volume with normal distribution
+            long volume = Math.max(50000, 100000 + (long)(random.nextGaussian() * 500000));
             
-            // Ensure volume is positive
-            volume = Math.max(50000, volume);
+            // Calculate change percentage
+            double change = ((close - open) / open) * 100;
+            
+            // Determine sentiment based on price movement
+            String sentiment = determineSentiment(change);
             
             // Create date for this entry (going backwards from today)
             LocalDate date = LocalDate.now().minusDays(i);
@@ -378,14 +621,71 @@ public class StockDataManager {
                 high,
                 low,
                 close,
-                volume
+                volume,
+                true,  // Set isMockData to true
+                Double.NaN,  // Prediction will be added later
+                0,  // Rank will be set later
+                change,
+                sentiment,
+                "Unknown",  // Recommendation will be set later
+                0.0  // Confidence will be set later
             ));
             
             // Update base price for next iteration
             basePrice = close;
         }
-        
-        return mockData;
+
+        // Sort entries by date (newest first)
+        mockData.sort((a, b) -> b.date.compareTo(a.date));
+
+        try {
+            // Create model and calculate predictions
+            Model model = new Model();
+            model.prepareData(mockData);
+            model.trainModel();
+
+            // Create new list with predictions and recommendations
+            List<StockEntry> mockDataWithPredictions = new ArrayList<>();
+            for (int i = 0; i < mockData.size(); i++) {
+                StockEntry entry = mockData.get(i);
+                List<StockEntry> historicalData = mockData.subList(0, i + 1);
+                double prediction = model.predictNextDayPrice(entry, historicalData);
+                
+                // Calculate confidence based on historical accuracy
+                double confidence = calculateConfidence(historicalData, model);
+                
+                // Determine recommendation based on prediction and confidence
+                String recommendation = determineRecommendation(entry.close, prediction, confidence);
+                
+                mockDataWithPredictions.add(new StockEntry(
+                    entry.date,
+                    entry.open,
+                    entry.high,
+                    entry.low,
+                    entry.close,
+                    entry.volume,
+                    true,
+                    prediction,
+                    0,  // Rank will be set later
+                    entry.change,
+                    entry.sentiment,
+                    recommendation,
+                    confidence
+                ));
+            }
+
+            // Sort by change percentage to determine rank
+            mockDataWithPredictions.sort((a, b) -> Double.compare(Math.abs(b.change), Math.abs(a.change)));
+            for (int i = 0; i < mockDataWithPredictions.size(); i++) {
+                StockEntry entry = mockDataWithPredictions.get(i);
+                entry.rank = i + 1;
+            }
+
+            return mockDataWithPredictions;
+        } catch (Exception e) {
+            System.err.println("Error generating predictions for mock data: " + e.getMessage());
+            return mockData; // Return data without predictions if model fails
+        }
     }
 
     private void saveMockDataToFile(List<StockEntry> mockData, String symbol) throws IOException {
@@ -430,71 +730,13 @@ public class StockDataManager {
         }
     }
 
-    public static List<StockEntry> processData(String filePath) throws IOException {
-        List<StockEntry> entries = new ArrayList<>();
-        
-        try (FileReader reader = new FileReader(filePath)) {
-            JsonObject json = new Gson().fromJson(reader, JsonObject.class);
-            
-            // Check for rate limit message
-            if (json.has("Information") && json.get("Information").getAsString().contains("API rate limit")) {
-                System.out.println("Rate limit hit for file: " + filePath + ". Generating mock data.");
-                String symbol = extractSymbolFromPath(filePath);
-                return generateMockData(symbol);
-            }
-            
-            JsonObject timeSeries = json.getAsJsonObject("Time Series (Daily)");
-            
-            if (timeSeries != null) {
-                timeSeries.entrySet().forEach(entry -> {
-                    String date = entry.getKey();
-                    JsonObject dailyData = entry.getValue().getAsJsonObject();
-                    
-                    try {
-                        entries.add(new StockEntry(
-                            date,
-                            Double.parseDouble(dailyData.get("1. open").getAsString()),
-                            Double.parseDouble(dailyData.get("2. high").getAsString()),
-                            Double.parseDouble(dailyData.get("3. low").getAsString()),
-                            Double.parseDouble(dailyData.get("4. close").getAsString()),
-                            (long) Double.parseDouble(dailyData.get("5. volume").getAsString())
-                        ));
-                    } catch (NumberFormatException e) {
-                        System.err.println("Error parsing number for date " + date + ": " + e.getMessage());
-                    }
-                });
-            } else {
-                // If no time series data is found, generate mock data
-                System.out.println("No time series data found for file: " + filePath + ". Generating mock data.");
-                String symbol = extractSymbolFromPath(filePath);
-                return generateMockData(symbol);
-            }
-        } catch (Exception e) {
-            System.err.println("Error processing data file: " + e.getMessage());
-            // If there's any error processing the file, generate mock data
-            System.out.println("Falling back to mock data generation.");
-            String symbol = extractSymbolFromPath(filePath);
-            return generateMockData(symbol);
-        }
-        
-        // Sort by date in descending order (most recent first)
-        entries.sort((a, b) -> b.date.compareTo(a.date));
-        return entries;
-    }
-    
     private static String extractSymbolFromPath(String filePath) {
-        // Extract symbol from file path (e.g., "data/json/AAPL_daily.json" -> "AAPL")
-        String fileName = new File(filePath).getName();
-        String symbol = fileName.split("_")[0];
-        if (symbol.endsWith(".json") || symbol.endsWith(".csv")) {
-            symbol = symbol.substring(0, symbol.lastIndexOf('.'));
-        }
-        return symbol;
+        return new File(filePath).getName().split("_")[0].replaceAll("\\.[^.]+$", "");
     }
 
     public static String toString(List<StockEntry> data) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Date, Open, High, Low, Close, Volume\n"); // Add header
+        sb.append("Rank, Symbol, Open, Current, Change, Sentiment, Recommendation, Confidence, Predicted Close\n");
         for (StockEntry entry : data) {
             sb.append(entry.toString()).append("\n");
         }

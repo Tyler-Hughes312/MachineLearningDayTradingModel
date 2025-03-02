@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.util.Arrays;
 
 public class WebVisualization {
     private static final String CONFIG_FILE = "config.properties";
@@ -116,7 +117,7 @@ public class WebVisualization {
                         for (Future<Map<String, Object>> future : futures) {
                             try {
                                 Map<String, Object> prediction = future.get(30, TimeUnit.SECONDS);
-                                if (prediction != null && prediction.containsKey("success") && (Boolean)prediction.get("success")) {
+                                if (prediction != null) {  // Remove the success check since we don't add it anymore
                                     predictions.add(prediction);
                                 }
                             } catch (Exception e) {
@@ -126,22 +127,20 @@ public class WebVisualization {
 
                         executor.shutdown();
                         
-                        // Sort predictions by predicted change (descending)
+                        // Sort predictions by predicted change
                         predictions.sort((a, b) -> {
-                            double changeA = (double) a.get("predictedChange");
-                            double changeB = (double) b.get("predictedChange");
-                            return Double.compare(changeB, changeA);
+                            Map<String, Object> aSignals = (Map<String, Object>) a.get("tradingSignals");
+                            Map<String, Object> bSignals = (Map<String, Object>) b.get("tradingSignals");
+                            double aChange = aSignals != null ? ((Number) aSignals.get("predictedChange")).doubleValue() : 0.0;
+                            double bChange = bSignals != null ? ((Number) bSignals.get("predictedChange")).doubleValue() : 0.0;
+                            return Double.compare(Math.abs(bChange), Math.abs(aChange)); // Sort by absolute change
                         });
-
-                        // Take top 20
-                        List<Map<String, Object>> top20 = predictions.size() > 20 ? 
-                            predictions.subList(0, 20) : predictions;
 
                         Map<String, Object> response = new HashMap<>();
                         response.put("success", true);
-                        response.put("predictions", top20);
+                        response.put("predictions", predictions);
                         return new Gson().toJson(response);
-                        
+
                     } catch (Exception e) {
                         return createErrorResponse("Error processing request: " + e.getMessage());
                     }
@@ -263,52 +262,81 @@ public class WebVisualization {
 
     private static void prefetchStockData() {
         System.out.println("Loading stock data for all symbols...");
-        ExecutorService executor = Executors.newFixedThreadPool(1); // Use single thread to respect rate limits
+        
+        // Create thread pools for different tasks
+        ExecutorService apiExecutor = Executors.newFixedThreadPool(3);  // 3 threads for API calls
+        ExecutorService processingExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());  // CPU-bound tasks
+        
         CountDownLatch latch = new CountDownLatch(COMMON_STOCKS.length);
         final AtomicInteger processedCount = new AtomicInteger(0);
+        
+        // Group stocks into batches of 5 to respect rate limits while allowing parallel processing
+        List<List<String>> batches = new ArrayList<>();
+        for (int i = 0; i < COMMON_STOCKS.length; i += 5) {
+            int end = Math.min(i + 5, COMMON_STOCKS.length);
+            batches.add(Arrays.asList(Arrays.copyOfRange(COMMON_STOCKS, i, end)));
+        }
 
-        for (String symbol : COMMON_STOCKS) {
-            executor.submit(() -> {
-                try {
-                    int count = processedCount.incrementAndGet();
-                    System.out.println("Processing " + symbol + " (" + count + "/" + COMMON_STOCKS.length + ")...");
-                    StockDataManager stockManager = new StockDataManager(apiKey);
-                    stockManager.setSymbol(symbol);
-                    
+        for (List<String> batch : batches) {
+            // Process each batch
+            for (String symbol : batch) {
+                apiExecutor.submit(() -> {
                     try {
-                        stockManager.fetchAndSaveStockData(symbol);
-                        // Wait 15 seconds between API calls to respect rate limits
-                        Thread.sleep(15000);
-                        List<StockDataManager.StockEntry> data = StockDataManager.processData(stockManager.getOutputFile());
+                        int count = processedCount.incrementAndGet();
+                        System.out.println("Processing " + symbol + " (" + count + "/" + COMMON_STOCKS.length + ")...");
+                        StockDataManager stockManager = new StockDataManager(apiKey);
+                        stockManager.setSymbol(symbol);
                         
-                        if (data != null && !data.isEmpty()) {
-                            stockDataCache.put(symbol, data);
-                            // Pre-train the model
-                            Model model = new Model();
-                            model.prepareData(data);
-                            model.trainModel();
-                            modelCache.put(symbol, model);
-                            System.out.println("Successfully loaded and processed data for " + symbol);
+                        try {
+                            // Fetch data
+                            List<StockDataManager.StockEntry> data = stockManager.fetchAndSaveStockData(symbol);
+                            
+                            if (data != null && !data.isEmpty()) {
+                                stockDataCache.put(symbol, data);
+                                
+                                // Submit model training to processing executor
+                                processingExecutor.submit(() -> {
+                                    try {
+                                        Model model = new Model();
+                                        model.prepareData(data);
+                                        model.trainModel();
+                                        modelCache.put(symbol, model);
+                                        System.out.println("Successfully loaded and processed data for " + symbol);
+                                    } catch (Exception e) {
+                                        System.err.println("Error training model for " + symbol + ": " + e.getMessage());
+                                    }
+                                });
+                            }
+                            
+                            // Shorter wait time between API calls within a batch
+                            Thread.sleep(5000);
+                            
+                        } catch (Exception e) {
+                            System.err.println("Error processing " + symbol + ": " + e.getMessage());
+                            if (e.getMessage() != null && e.getMessage().contains("rate limit")) {
+                                System.out.println("Rate limit hit, waiting 30 seconds before next request...");
+                                Thread.sleep(30000);
+                            }
                         }
                     } catch (Exception e) {
                         System.err.println("Error processing " + symbol + ": " + e.getMessage());
-                        // If it's a rate limit error, wait longer
-                        if (e.getMessage() != null && e.getMessage().contains("rate limit")) {
-                            System.out.println("Rate limit hit, waiting 60 seconds before next request...");
-                            Thread.sleep(60000);
-                        }
+                    } finally {
+                        latch.countDown();
                     }
-                } catch (Exception e) {
-                    System.err.println("Error processing " + symbol + ": " + e.getMessage());
-                } finally {
-                    latch.countDown();
-                }
-            });
+                });
+            }
+            
+            // Wait between batches to respect rate limits
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
-        // Wait for all operations to complete or timeout after 30 minutes
+        // Wait for all operations to complete or timeout after 15 minutes
         try {
-            if (!latch.await(30, TimeUnit.MINUTES)) {
+            if (!latch.await(15, TimeUnit.MINUTES)) {
                 System.err.println("Timeout waiting for data loading");
             }
         } catch (InterruptedException e) {
@@ -316,13 +344,19 @@ public class WebVisualization {
             Thread.currentThread().interrupt();
         }
 
-        executor.shutdown();
+        // Shutdown executors
+        apiExecutor.shutdown();
+        processingExecutor.shutdown();
         try {
-            if (!executor.awaitTermination(5, TimeUnit.MINUTES)) {
-                executor.shutdownNow();
+            if (!apiExecutor.awaitTermination(5, TimeUnit.MINUTES)) {
+                apiExecutor.shutdownNow();
+            }
+            if (!processingExecutor.awaitTermination(5, TimeUnit.MINUTES)) {
+                processingExecutor.shutdownNow();
             }
         } catch (InterruptedException e) {
-            executor.shutdownNow();
+            apiExecutor.shutdownNow();
+            processingExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
 
@@ -342,128 +376,127 @@ public class WebVisualization {
 
         // Use cached data and model if available
         List<StockDataManager.StockEntry> data = stockDataCache.get(symbol);
-        if (data == null || data.isEmpty()) {
-            throw new Exception("No data available for symbol: " + symbol);
-        }
-
         Model model = modelCache.get(symbol);
-        if (model == null) {
-            throw new Exception("No model available for symbol: " + symbol);
+
+        // If no data in cache or no model, try to fetch and process new data
+        if (data == null || data.isEmpty() || model == null) {
+            try {
+                StockDataManager stockManager = new StockDataManager(apiKey);
+                stockManager.setSymbol(symbol);
+                data = stockManager.fetchAndSaveStockData(symbol);
+                
+                if (data == null || data.isEmpty()) {
+                    System.out.println("No data available for " + symbol + ", using mock data");
+                    data = StockDataManager.generateMockData(symbol);
+                }
+                
+                stockDataCache.put(symbol, data);
+                model = new Model();
+                model.prepareData(data);
+                model.trainModel();
+                modelCache.put(symbol, model);
+            } catch (Exception e) {
+                System.out.println("Error fetching data for " + symbol + ", using mock data: " + e.getMessage());
+                data = StockDataManager.generateMockData(symbol);
+                stockDataCache.put(symbol, data);
+                model = new Model();
+                model.prepareData(data);
+                model.trainModel();
+                modelCache.put(symbol, model);
+            }
         }
 
         // Get last entry (most recent data)
         StockDataManager.StockEntry lastEntry = data.get(0); // Data is in reverse chronological order
         
-        // Get predictions for today and tomorrow
-        double todayPrediction = model.predictNextDayPrice(lastEntry, data);
+        // Check if market is closed
+        java.time.LocalTime currentTime = java.time.LocalTime.now();
+        java.time.LocalTime marketOpen = java.time.LocalTime.of(9, 30);  // Market opens at 9:30 AM
+        java.time.LocalTime marketClose = java.time.LocalTime.of(16, 0); // Market closes at 4:00 PM
+        boolean isMarketClosed = currentTime.isAfter(marketClose) || currentTime.isBefore(marketOpen);
         
-        // Calculate today's predicted values
-        double todayPredictedOpen = todayPrediction * 0.9995; // Slight adjustment for open
-        double todayPredictedHigh = todayPrediction * 1.01;   // Estimate 1% higher
-        double todayPredictedLow = todayPrediction * 0.99;    // Estimate 1% lower
-        double todayPredictedClose = todayPrediction;
-        double todayPredictedVolume = lastEntry.volume * 1.05; // Estimate 5% volume increase
+        // Get predictions
+        double predictedClose = model.predictNextDayPrice(lastEntry, data);
+        if (Double.isNaN(predictedClose)) {
+            throw new Exception("Invalid prediction value for symbol: " + symbol);
+        }
         
-        // Get tomorrow's prediction using today's predicted values
-        double tomorrowPrediction = model.predictNextDayPrice(new StockDataManager.StockEntry(
-            lastEntry.date,
-            todayPredictedOpen,
-            todayPredictedHigh,
-            todayPredictedLow,
-            todayPredictedClose,
-            todayPredictedVolume
-        ), data);
-
-        // Calculate percentage changes
-        double todayChange = ((todayPredictedClose - lastEntry.close) / lastEntry.close) * 100;
-        double tomorrowChange = ((tomorrowPrediction - todayPredictedClose) / todayPredictedClose) * 100;
+        // Calculate predicted values
+        double predictedOpen = lastEntry.close; // Use current price as open
+        double predictedHigh = Math.max(predictedOpen, predictedClose) * 1.01;   // Estimate 1% higher
+        double predictedLow = Math.min(predictedOpen, predictedClose) * 0.99;    // Estimate 1% lower
         
-        // Calculate volatility (using high-low range as percentage of opening price)
-        double todayVolatility = ((todayPredictedHigh - todayPredictedLow) / todayPredictedOpen) * 100;
-        
-        // Calculate trading volume change
-        double volumeChange = ((todayPredictedVolume - lastEntry.volume) / lastEntry.volume) * 100;
-
-        // Create response matching frontend expectations
+        // Create response map
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
         response.put("symbol", symbol);
         response.put("date", lastEntry.date);
-        response.put("isMockData", stockDataManager.isUsingMockData()); // Add mock data status
-        
-        // Historical data (last known values)
         response.put("lastClose", lastEntry.close);
-        response.put("lastOpen", lastEntry.open);
-        response.put("lastHigh", lastEntry.high);
-        response.put("lastLow", lastEntry.low);
-        response.put("lastVolume", lastEntry.volume);
+        response.put("todayOpen", lastEntry.open); // Always use actual open price
+        response.put("currentPrice", lastEntry.close); // Use actual current price
+        response.put("predictedHigh", predictedHigh);
+        response.put("predictedLow", predictedLow);
+        response.put("predictedClose", predictedClose);
+        response.put("volume", lastEntry.volume);
         
-        // Today's predicted values
-        response.put("todayOpen", todayPredictedOpen);
-        response.put("todayHigh", todayPredictedHigh);
-        response.put("todayLow", todayPredictedLow);
-        response.put("todayClose", todayPredictedClose);
-        response.put("todayVolume", todayPredictedVolume);
-        response.put("todayChange", todayChange);
-        response.put("todayVolatility", todayVolatility);
-        response.put("volumeChange", volumeChange);
-        
-        // Current price (estimated as weighted average between high and low)
-        double currentPrice = (todayPredictedHigh * 0.6 + todayPredictedLow * 0.4);
-        response.put("currentPrice", currentPrice);
-        
-        // Tomorrow's predictions
-        response.put("tomorrowPrice", tomorrowPrediction);
-        response.put("tomorrowChange", tomorrowChange);
-        
-        // Market sentiment indicators
-        boolean bullishSignal = todayChange > 0 && tomorrowChange > 0;
-        boolean bearishSignal = todayChange < 0 && tomorrowChange < 0;
-        response.put("marketSentiment", bullishSignal ? "Bullish" : (bearishSignal ? "Bearish" : "Neutral"));
-        
-        // Enhanced trading signals and recommendations
+        // Calculate trading signals
         Map<String, Object> tradingSignals = new HashMap<>();
         
-        // Calculate confidence score (0-1) based on multiple factors
-        double trendConfidence = Math.min(1.0, Math.abs(tomorrowChange) / 5.0); // Higher change = higher confidence
-        double volumeConfidence = Math.min(1.0, Math.abs(volumeChange) / 50.0); // Volume spike indicates confidence
-        double volatilityImpact = Math.max(0, 1 - (todayVolatility / 10.0)); // Lower volatility = higher confidence
+        // Calculate price changes
+        double openToCloseChange = ((lastEntry.close - lastEntry.open) / lastEntry.open) * 100;
+        double currentToPredictedChange = ((predictedClose - lastEntry.close) / lastEntry.close) * 100;
         
-        double overallConfidence = (trendConfidence * 0.5 + volumeConfidence * 0.3 + volatilityImpact * 0.2);
+        // If market is closed, predict next day's open
+        if (isMarketClosed) {
+            double nextDayPredictedOpen = predictedClose; // Use predicted close as next day's open
+            response.put("nextDayPredictedOpen", nextDayPredictedOpen);
+            tradingSignals.put("nextDayPredictedOpen", nextDayPredictedOpen);
+            
+            // Calculate next day's predicted movement
+            double nextDayPredictedChange = ((nextDayPredictedOpen - lastEntry.close) / lastEntry.close) * 100;
+            tradingSignals.put("nextDayPredictedChange", nextDayPredictedChange);
+        }
         
-        // Calculate recommended position size
-        double maxPositionSize = 0.1; // Maximum 10% of portfolio per trade
-        double recommendedPositionSizePercent = maxPositionSize * overallConfidence;
+        // Use the more significant change for the main prediction
+        double percentChange = isMarketClosed ? 
+            ((predictedClose - lastEntry.close) / lastEntry.close) * 100 : // Next day's movement when market closed
+            Math.abs(openToCloseChange) > Math.abs(currentToPredictedChange) ? 
+                openToCloseChange : currentToPredictedChange;
         
-        // Calculate stop loss and take profit levels
-        double stopLossPercent = Math.max(2.0, todayVolatility * 0.5); // Minimum 2% stop loss
-        double takeProfitPercent = Math.max(stopLossPercent * 1.5, Math.abs(tomorrowChange)); // Minimum 1.5:1 reward:risk
+        // Add data source information
+        tradingSignals.put("dataSource", lastEntry.isMockData ? "Mock Data" : "Real Data");
         
-        tradingSignals.put("volumeAlert", Math.abs(volumeChange) > 20);
-        tradingSignals.put("volatilityAlert", todayVolatility > 5);
-        tradingSignals.put("trendStrength", Math.abs(todayChange));
-        tradingSignals.put("overallConfidence", overallConfidence);
-        tradingSignals.put("recommendedPositionSize", recommendedPositionSizePercent);
+        // Risk management calculations
+        double volatility = Math.abs(predictedHigh - predictedLow) / predictedOpen * 100;
+        double stopLossPercent = Math.max(2.0, volatility * 0.5); // Minimum 2% stop loss
+        double takeProfitPercent = Math.max(stopLossPercent * 1.5, Math.abs(percentChange)); // Minimum 1.5:1 reward:risk
+        
         tradingSignals.put("stopLossPercent", stopLossPercent);
         tradingSignals.put("takeProfitPercent", takeProfitPercent);
         tradingSignals.put("riskRewardRatio", takeProfitPercent / stopLossPercent);
+        tradingSignals.put("predictedChange", percentChange);
+        tradingSignals.put("openToCloseChange", openToCloseChange);
+        tradingSignals.put("currentToPredictedChange", currentToPredictedChange);
+        tradingSignals.put("confidence", 0.85); // Default confidence value
         
+        // Determine sentiment and recommendation based on both changes
+        String sentiment;
         String recommendation;
-        if (bullishSignal && overallConfidence > 0.6) {
-            recommendation = "Strong Buy";
-        } else if (bullishSignal && overallConfidence > 0.3) {
+        if (percentChange > 1.0) {
+            sentiment = "Bullish";
             recommendation = "Consider Buy";
-        } else if (bearishSignal && overallConfidence > 0.6) {
-            recommendation = "Strong Sell";
-        } else if (bearishSignal && overallConfidence > 0.3) {
+        } else if (percentChange < -1.0) {
+            sentiment = "Bearish";
             recommendation = "Consider Sell";
         } else {
+            sentiment = "Neutral";
             recommendation = "Hold";
         }
-        tradingSignals.put("recommendation", recommendation);
         
+        tradingSignals.put("sentiment", sentiment);
+        tradingSignals.put("recommendation", recommendation);
         response.put("tradingSignals", tradingSignals);
-
+        
         return response;
     }
     

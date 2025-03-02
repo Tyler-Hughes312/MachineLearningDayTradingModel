@@ -122,6 +122,22 @@
             color: #ffd700;
         }
         
+        .data-source {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .data-source-mock {
+            background-color: rgba(255, 77, 77, 0.2);
+            color: #ff4d4d;
+        }
+        
+        .data-source-real {
+            background-color: rgba(0, 255, 157, 0.2);
+            color: #00ff9d;
+        }
+        
         .prediction-card h6 {
             border-bottom: 2px solid var(--border-color);
             padding-bottom: 8px;
@@ -257,44 +273,31 @@
                                     <p><strong>Symbol:</strong> <span id="resultSymbol"></span></p>
                                     <p><strong>Last Update:</strong> <span id="resultDate"></span></p>
                                     
-                                    <h6 class="mt-4">Today's Data</h6>
+                                    <h6 class="mt-4">Market Data</h6>
                                     <div class="row">
                                         <div class="col-md-6">
                                             <p><strong>Open:</strong> $<span id="todayOpen"></span></p>
-                                            <p><strong>Close:</strong> $<span id="todayClose"></span></p>
-                                            <p><strong>Change:</strong> <span id="todayChange"></span>%</p>
+                                            <p><strong>Current Price:</strong> $<span id="currentPrice"></span></p>
+                                            <p><strong>Volume:</strong> <span id="volume"></span></p>
                                         </div>
                                         <div class="col-md-6">
-                                            <p><strong>High:</strong> $<span id="todayHigh"></span></p>
-                                            <p><strong>Low:</strong> $<span id="todayLow"></span></p>
-                                            <p><strong>Volume:</strong> <span id="todayVolume"></span></p>
+                                            <p><strong>Predicted High:</strong> $<span id="predictedHigh"></span></p>
+                                            <p><strong>Predicted Low:</strong> $<span id="predictedLow"></span></p>
+                                            <p><strong>Predicted Change:</strong> <span id="predictedChange"></span></p>
                                         </div>
                                     </div>
 
-                                    <h6 class="mt-4">Tomorrow's Prediction</h6>
-                                    <div class="row">
-                                        <div class="col-md-6">
-                                            <p><strong>Predicted Price:</strong> $<span id="tomorrowPrice"></span></p>
-                                            <p><strong>Predicted Change:</strong> <span id="tomorrowChange"></span>%</p>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <p><strong>Market Sentiment:</strong> <span id="marketSentiment"></span></p>
-                                            <p><strong>Recommendation:</strong> <span id="recommendation"></span></p>
-                                        </div>
-                                    </div>
-
-                                    <!-- Enhanced Trading Recommendations -->
                                     <h6 class="mt-4">Trading Analysis</h6>
                                     <div class="row">
                                         <div class="col-md-6">
+                                            <p><strong>Market Sentiment:</strong> <span id="marketSentiment"></span></p>
+                                            <p><strong>Recommendation:</strong> <span id="recommendation"></span></p>
                                             <p><strong>Model Confidence:</strong> <span id="modelConfidence"></span>%</p>
-                                            <p><strong>Recommended Position Size:</strong> <span id="positionSize"></span>% of portfolio</p>
-                                            <p><strong>Risk/Reward Ratio:</strong> <span id="riskReward"></span></p>
                                         </div>
                                         <div class="col-md-6">
-                                            <p><strong>Suggested Stop Loss:</strong> <span id="stopLoss"></span>%</p>
-                                            <p><strong>Take Profit Target:</strong> <span id="takeProfit"></span>%</p>
-                                            <p><strong>Trend Strength:</strong> <span id="trendStrength"></span></p>
+                                            <p><strong>Risk/Reward Ratio:</strong> <span id="riskReward"></span></p>
+                                            <p><strong>Stop Loss:</strong> <span id="stopLoss"></span>%</p>
+                                            <p><strong>Take Profit:</strong> <span id="takeProfit"></span>%</p>
                                         </div>
                                     </div>
                                     
@@ -347,12 +350,20 @@
                         <tr>
                             <th>Rank</th>
                             <th>Symbol</th>
-                            <th>Today's Open</th>
-                            <th>Today's Close</th>
-                            <th>Today's Change</th>
-                            <th>Tomorrow's Price</th>
-                            <th>Tomorrow's Change</th>
+                            <th>Open</th>
+                            <th>Current</th>
+                            <th>Predicted Close</th>
+                            <th>Next Day Predicted Open</th>
+                            <th>Open to Close %</th>
+                            <th>Current to Predicted %</th>
+                            <th>Next Day Predicted Change %</th>
                             <th>Sentiment</th>
+                            <th>Recommendation</th>
+                            <th>Confidence</th>
+                            <th>Risk/Reward</th>
+                            <th>Stop Loss %</th>
+                            <th>Take Profit %</th>
+                            <th>Data Source</th>
                         </tr>
                     </thead>
                     <tbody id="top20Table">
@@ -443,7 +454,7 @@
 
         async function executeAutomatedTrade() {
             const symbol = document.getElementById('resultSymbol').textContent;
-            const predictedChange = parseFloat(document.getElementById('tomorrowChange').textContent);
+            const predictedChange = parseFloat(document.getElementById('predictedChange').textContent);
             const statusDiv = document.querySelector('.trade-status');
             
             try {
@@ -495,68 +506,65 @@
                 });
                 const data = await response.json();
                 
-                if (data.success) {
-                    document.getElementById('resultSymbol').textContent = data.symbol;
-                    document.getElementById('resultDate').textContent = data.date;
-                    
-                    // Today's data
-                    document.getElementById('todayOpen').textContent = data.todayOpen.toFixed(2);
-                    document.getElementById('todayClose').textContent = data.todayClose.toFixed(2);
-                    document.getElementById('todayHigh').textContent = data.todayHigh.toFixed(2);
-                    document.getElementById('todayLow').textContent = data.todayLow.toFixed(2);
-                    document.getElementById('todayVolume').textContent = data.todayVolume.toLocaleString();
-                    
-                    const todayChangeEl = document.getElementById('todayChange');
-                    todayChangeEl.textContent = (data.todayChange >= 0 ? '+' : '') + data.todayChange.toFixed(2);
-                    todayChangeEl.className = data.todayChange >= 0 ? 'positive-change' : 'negative-change';
-                    
-                    // Tomorrow's predictions
-                    document.getElementById('tomorrowPrice').textContent = data.tomorrowPrice.toFixed(2);
-                    const tomorrowChangeEl = document.getElementById('tomorrowChange');
-                    tomorrowChangeEl.textContent = (data.tomorrowChange >= 0 ? '+' : '') + data.tomorrowChange.toFixed(2);
-                    tomorrowChangeEl.className = data.tomorrowChange >= 0 ? 'positive-change' : 'negative-change';
-                    
-                    // Market analysis
-                    const marketSentiment = document.getElementById('marketSentiment');
-                    marketSentiment.textContent = data.marketSentiment;
-                    marketSentiment.className = `market-sentiment sentiment-${data.marketSentiment.toLowerCase()}`;
-                    
-                    // Enhanced trading signals
-                    document.getElementById('modelConfidence').textContent = (data.tradingSignals.overallConfidence * 100).toFixed(1);
-                    document.getElementById('positionSize').textContent = (data.tradingSignals.recommendedPositionSize * 100).toFixed(1);
-                    document.getElementById('riskReward').textContent = data.tradingSignals.riskRewardRatio.toFixed(2);
-                    document.getElementById('stopLoss').textContent = data.tradingSignals.stopLossPercent.toFixed(1);
-                    document.getElementById('takeProfit').textContent = data.tradingSignals.takeProfitPercent.toFixed(1);
-                    document.getElementById('trendStrength').textContent = data.tradingSignals.trendStrength.toFixed(2);
-                    
-                    const recommendation = document.getElementById('recommendation');
-                    recommendation.textContent = data.tradingSignals.recommendation;
-                    recommendation.className = data.tradingSignals.recommendation.toLowerCase().includes('buy') ? 'positive-change' :
-                                             data.tradingSignals.recommendation.toLowerCase().includes('sell') ? 'negative-change' : '';
-                    
-                    // Update data source indicator
-                    const dataSourceIndicator = document.querySelector('.data-source-indicator');
-                    const dataSourceBadge = dataSourceIndicator.querySelector('.badge');
-                    const dataSourceText = dataSourceIndicator.querySelector('.data-source-text');
-                    
-                    if (data.isMockData) {
-                        dataSourceIndicator.className = 'data-source-indicator alert alert-warning mb-3';
-                        dataSourceBadge.className = 'badge bg-warning text-dark';
-                        dataSourceBadge.textContent = 'MOCK DATA';
-                        dataSourceText.textContent = ' Using generated mock data for testing purposes';
-                    } else {
-                        dataSourceIndicator.className = 'data-source-indicator alert alert-info mb-3';
-                        dataSourceBadge.className = 'badge bg-info';
-                        dataSourceBadge.textContent = 'REAL DATA';
-                        dataSourceText.textContent = ' Using real market data from Alpha Vantage API';
-                    }
-                    dataSourceIndicator.style.display = 'block';
-
-                    resultCard.style.display = 'block';
-                } else {
+                if (data.success === false) {
                     errorMessage.textContent = data.error;
                     errorMessage.style.display = 'block';
+                    loadingDiv.style.display = 'none';
+                    return;
                 }
+
+                document.getElementById('resultSymbol').textContent = data.symbol;
+                document.getElementById('resultDate').textContent = data.date;
+                
+                // Today's data
+                document.getElementById('todayOpen').textContent = data.todayOpen.toFixed(2);
+                document.getElementById('currentPrice').textContent = data.currentPrice.toFixed(2);
+                document.getElementById('predictedHigh').textContent = data.predictedHigh.toFixed(2);
+                document.getElementById('predictedLow').textContent = data.predictedLow.toFixed(2);
+                document.getElementById('volume').textContent = data.volume.toLocaleString();
+                
+                // Trading signals
+                const tradingSignals = data.tradingSignals;
+                const predictedChange = tradingSignals.predictedChange;
+                const changeEl = document.getElementById('predictedChange');
+                changeEl.textContent = (predictedChange >= 0 ? '+' : '') + predictedChange.toFixed(2) + '%';
+                changeEl.className = predictedChange >= 0 ? 'positive-change' : 'negative-change';
+                
+                // Market analysis
+                const sentiment = document.getElementById('marketSentiment');
+                sentiment.textContent = tradingSignals.sentiment;
+                sentiment.className = `market-sentiment sentiment-${tradingSignals.sentiment.toLowerCase()}`;
+                
+                // Enhanced trading signals
+                document.getElementById('modelConfidence').textContent = (tradingSignals.confidence * 100).toFixed(1);
+                document.getElementById('riskReward').textContent = tradingSignals.riskRewardRatio.toFixed(2);
+                document.getElementById('stopLoss').textContent = tradingSignals.stopLossPercent.toFixed(1);
+                document.getElementById('takeProfit').textContent = tradingSignals.takeProfitPercent.toFixed(1);
+                
+                const recommendation = document.getElementById('recommendation');
+                recommendation.textContent = tradingSignals.recommendation;
+                recommendation.className = tradingSignals.recommendation.toLowerCase().includes('buy') ? 'positive-change' :
+                                         tradingSignals.recommendation.toLowerCase().includes('sell') ? 'negative-change' : '';
+                
+                // Update data source indicator
+                const dataSourceIndicator = document.querySelector('.data-source-indicator');
+                const dataSourceBadge = dataSourceIndicator.querySelector('.badge');
+                const dataSourceText = dataSourceIndicator.querySelector('.data-source-text');
+                
+                if (data.isMockData) {
+                    dataSourceIndicator.className = 'data-source-indicator alert alert-warning mb-3';
+                    dataSourceBadge.className = 'badge bg-warning text-dark';
+                    dataSourceBadge.textContent = 'MOCK DATA';
+                    dataSourceText.textContent = ' Using generated mock data for testing purposes';
+                } else {
+                    dataSourceIndicator.className = 'data-source-indicator alert alert-info mb-3';
+                    dataSourceBadge.className = 'badge bg-info';
+                    dataSourceBadge.textContent = 'REAL DATA';
+                    dataSourceText.textContent = ' Using real market data from Alpha Vantage API';
+                }
+                dataSourceIndicator.style.display = 'block';
+
+                resultCard.style.display = 'block';
             } catch (error) {
                 errorMessage.textContent = 'Error connecting to server: ' + error.message;
                 errorMessage.style.display = 'block';
@@ -589,25 +597,36 @@
                     
                     data.predictions.forEach((prediction, index) => {
                         const row = document.createElement('tr');
+                        const tradingSignals = prediction.tradingSignals;
+                        const predictedChange = tradingSignals.predictedChange;
                         
                         row.innerHTML = `
                             <td>${index + 1}</td>
                             <td><strong>${prediction.symbol}</strong></td>
                             <td>$${prediction.todayOpen.toFixed(2)}</td>
-                            <td>$${prediction.todayClose.toFixed(2)}</td>
-                            <td class="${prediction.todayChange >= 0 ? 'positive-change' : 'negative-change'}">
-                                ${prediction.todayChange >= 0 ? '+' : ''}${prediction.todayChange.toFixed(2)}%
+                            <td>$${prediction.currentPrice.toFixed(2)}</td>
+                            <td>$${prediction.predictedClose.toFixed(2)}</td>
+                            <td>${tradingSignals.nextDayPredictedOpen ? tradingSignals.nextDayPredictedOpen.toFixed(2) : 'N/A'}</td>
+                            <td class="${tradingSignals.openToCloseChange >= 0 ? 'positive-change' : 'negative-change'}">
+                                ${tradingSignals.openToCloseChange >= 0 ? '+' : ''}${tradingSignals.openToCloseChange.toFixed(2)}%
                             </td>
-                            <td>$${prediction.tomorrowPrice.toFixed(2)}</td>
-                            <td class="${prediction.tomorrowChange >= 0 ? 'positive-change' : 'negative-change'}">
-                                ${prediction.tomorrowChange >= 0 ? '+' : ''}${prediction.tomorrowChange.toFixed(2)}%
+                            <td class="${tradingSignals.currentToPredictedChange >= 0 ? 'positive-change' : 'negative-change'}">
+                                ${tradingSignals.currentToPredictedChange >= 0 ? '+' : ''}${tradingSignals.currentToPredictedChange.toFixed(2)}%
                             </td>
-                            <td>${prediction.marketSentiment}</td>
+                            <td class="${tradingSignals.nextDayPredictedChange ? (tradingSignals.nextDayPredictedChange >= 0 ? 'positive-change' : 'negative-change') : ''}">
+                                ${tradingSignals.nextDayPredictedChange ? tradingSignals.nextDayPredictedChange.toFixed(2) + '%' : 'N/A'}
+                            </td>
+                            <td>${tradingSignals.sentiment}</td>
+                            <td>${tradingSignals.recommendation}</td>
+                            <td>${(tradingSignals.confidence * 100).toFixed(1)}%</td>
+                            <td class="data-source ${tradingSignals.dataSource === 'Mock Data' ? 'data-source-mock' : 'data-source-real'}">
+                                ${tradingSignals.dataSource}
+                            </td>
                         `;
                         
                         // Add sentiment styling to the table cell
-                        const sentimentCell = row.querySelector('td:last-child');
-                        sentimentCell.className = `market-sentiment sentiment-${prediction.marketSentiment.toLowerCase()}`;
+                        const sentimentCell = row.querySelector('td:nth-child(6)');
+                        sentimentCell.className = `market-sentiment sentiment-${tradingSignals.sentiment.toLowerCase()}`;
                         
                         tableBody.appendChild(row);
                     });
