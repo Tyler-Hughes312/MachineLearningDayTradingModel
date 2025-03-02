@@ -254,19 +254,120 @@ public class StockDataManager {
         }
     }
     
-    private List<StockEntry> generateMockData(String symbol) {
+    private static List<StockEntry> generateMockData(String symbol) {
         List<StockEntry> mockData = new ArrayList<>();
         Random random = new Random();
-        double basePrice = 100.0 + random.nextDouble() * 900.0; // Random base price between 100 and 1000
+        
+        // Use different base prices for different symbols to make it more realistic
+        double basePrice;
+        switch(symbol.toUpperCase()) {
+            case "AAPL":
+                basePrice = 170.0;
+                break;
+            case "MSFT":
+                basePrice = 380.0;
+                break;
+            case "GOOGL":
+                basePrice = 140.0;
+                break;
+            case "AMZN":
+                basePrice = 170.0;
+                break;
+            case "NVDA":
+                basePrice = 720.0;
+                break;
+            case "META":
+                basePrice = 480.0;
+                break;
+            case "BRK-B":
+                basePrice = 360.0;
+                break;
+            case "LLY":
+                basePrice = 740.0;
+                break;
+            case "AVGO":
+                basePrice = 1200.0;
+                break;
+            case "JPM":
+                basePrice = 170.0;
+                break;
+            case "V":
+                basePrice = 270.0;
+                break;
+            case "XOM":
+                basePrice = 105.0;
+                break;
+            case "ORCL":
+                basePrice = 110.0;
+                break;
+            case "MA":
+                basePrice = 470.0;
+                break;
+            case "HD":
+                basePrice = 370.0;
+                break;
+            case "CVX":
+                basePrice = 150.0;
+                break;
+            case "MRK":
+                basePrice = 125.0;
+                break;
+            case "ABBV":
+                basePrice = 170.0;
+                break;
+            case "KO":
+                basePrice = 60.0;
+                break;
+            case "PEP":
+                basePrice = 170.0;
+                break;
+            case "BAC":
+                basePrice = 33.0;
+                break;
+            case "COST":
+                basePrice = 730.0;
+                break;
+            case "MCD":
+                basePrice = 290.0;
+                break;
+            case "TMO":
+                basePrice = 550.0;
+                break;
+            case "CSCO":
+                basePrice = 49.0;
+                break;
+            case "CRM":
+                basePrice = 280.0;
+                break;
+            case "ACN":
+                basePrice = 370.0;
+                break;
+            case "ADBE":
+                basePrice = 550.0;
+                break;
+            case "AMD":
+                basePrice = 170.0;
+                break;
+            case "NFLX":
+                basePrice = 580.0;
+                break;
+            default:
+                basePrice = 100.0 + random.nextDouble() * 900.0; // Random base price between 100 and 1000
+                break;
+        }
         
         // Generate 100 days of mock data
         for (int i = 0; i < 100; i++) {
-            double dailyVariation = (random.nextDouble() - 0.5) * 5; // -2.5% to +2.5% daily change
-            double open = basePrice * (1 + dailyVariation/100);
-            double close = open * (1 + (random.nextDouble() - 0.5)/50); // Small variation from open
-            double high = Math.max(open, close) * (1 + random.nextDouble()/100);
-            double low = Math.min(open, close) * (1 - random.nextDouble()/100);
-            long volume = 100000 + random.nextInt(900000); // Random volume between 100k and 1M
+            double volatility = 0.02; // 2% daily volatility
+            double dailyVariation = (random.nextGaussian() * volatility); // Normal distribution
+            double open = basePrice * (1 + dailyVariation);
+            double close = open * (1 + (random.nextGaussian() * volatility));
+            double high = Math.max(open, close) * (1 + Math.abs(random.nextGaussian() * volatility));
+            double low = Math.min(open, close) * (1 - Math.abs(random.nextGaussian() * volatility));
+            long volume = 100000 + (long)(random.nextGaussian() * 500000); // Random volume with normal distribution
+            
+            // Ensure volume is positive
+            volume = Math.max(50000, volume);
             
             // Create date for this entry (going backwards from today)
             LocalDate date = LocalDate.now().minusDays(i);
@@ -334,6 +435,14 @@ public class StockDataManager {
         
         try (FileReader reader = new FileReader(filePath)) {
             JsonObject json = new Gson().fromJson(reader, JsonObject.class);
+            
+            // Check for rate limit message
+            if (json.has("Information") && json.get("Information").getAsString().contains("API rate limit")) {
+                System.out.println("Rate limit hit for file: " + filePath + ". Generating mock data.");
+                String symbol = extractSymbolFromPath(filePath);
+                return generateMockData(symbol);
+            }
+            
             JsonObject timeSeries = json.getAsJsonObject("Time Series (Daily)");
             
             if (timeSeries != null) {
@@ -354,15 +463,33 @@ public class StockDataManager {
                         System.err.println("Error parsing number for date " + date + ": " + e.getMessage());
                     }
                 });
+            } else {
+                // If no time series data is found, generate mock data
+                System.out.println("No time series data found for file: " + filePath + ". Generating mock data.");
+                String symbol = extractSymbolFromPath(filePath);
+                return generateMockData(symbol);
             }
         } catch (Exception e) {
             System.err.println("Error processing data file: " + e.getMessage());
-            throw e;
+            // If there's any error processing the file, generate mock data
+            System.out.println("Falling back to mock data generation.");
+            String symbol = extractSymbolFromPath(filePath);
+            return generateMockData(symbol);
         }
         
         // Sort by date in descending order (most recent first)
         entries.sort((a, b) -> b.date.compareTo(a.date));
         return entries;
+    }
+    
+    private static String extractSymbolFromPath(String filePath) {
+        // Extract symbol from file path (e.g., "data/json/AAPL_daily.json" -> "AAPL")
+        String fileName = new File(filePath).getName();
+        String symbol = fileName.split("_")[0];
+        if (symbol.endsWith(".json") || symbol.endsWith(".csv")) {
+            symbol = symbol.substring(0, symbol.lastIndexOf('.'));
+        }
+        return symbol;
     }
 
     public static String toString(List<StockEntry> data) {
